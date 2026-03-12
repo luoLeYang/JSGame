@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Maze Adventure</title>
+<!-- Google Fonts for a retro feel -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=VT323&display=swap"
+rel="stylesheet">
+<style>
+body {
+margin: 0;
+padding: 0;
+display: flex;
+justify-content: center;
+align-items: center;
+height: 100vh;
+background: radial-gradient(circle at 20% 20%, #202646 0%, #0a0b19 50%, #04050d 100%);
+font-family: 'VT323', monospace;
+color: #fff;
+}
+#game-container {
+text-align: center;
+}
+canvas {
+background-color: #000;
+border: 4px solid #79e8ff;
+box-shadow: 0 0 24px #79e8ff, inset 0 0 14px #2f3d8a;
+}
+h1 {
+color: #ffd447;
+font-size: 3em;
+text-shadow: 3px 3px 0px #ff4cb8;
+margin-bottom: 20px;
+}
+
+#credit {
+margin-top: 12px;
+font-size: 28px;
+letter-spacing: 1px;
+color: #79e8ff;
+text-shadow: 1px 1px #005f73;
+}
+</style>
+</head>
+<body>
+<div id="game-container">
+<h1 id="game-title">Maze Adventure</h1>
+<canvas id="gameCanvas"></canvas>
+<div id="credit">Designed by Robin</div>
+</div>
+<script>
+// --- Basic Setup ---
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+// --- Game Configuration ---
+const GRID_SIZE = 25;
+const MAZE_WIDTH = 31; // Must be an odd number
+const MAZE_HEIGHT = 23; // Must be an odd number
+canvas.width = MAZE_WIDTH * GRID_SIZE;
+canvas.height = MAZE_HEIGHT * GRID_SIZE;
+
+const COIN_COUNT = 20;
+const POWER_UP_COUNT = 3;
+const GUARD_COUNT = 3;
+const GUARD_MOVE_INTERVAL = 220;
+const GUARD_STUCK_LIMIT = 6;
+const PLAYER_STEP_MULTIPLIER = 1;
+const HOLD_MOVE_INTERVAL = 70;
+const HOLD_MOVE_START_DELAY = 180;
+
+const colors = {
+wall: '#10226a',
+path: '#0d1124',
+pathAlt: '#121a33',
+player: '#ffd447',
+exitActive: '#00ff95',
+exitLocked: '#7f8c8d',
+coin: '#ffca3a',
+powerUp: '#00d4ff',
+guard: '#ff4d6d'
+};
+// --- Game State ---
+let maze, player, exit;
+let gameTimer = 300; // 5 minutes in seconds
+let timerInterval;
+let lastGuardMoveTime = 0;
+let holdMoveTimer = null;
+let holdMoveStartTimer = null;
+let activeDirectionKey = null;
+let coins = [];
+let powerUps = [];
+let guards = [];
+let coinsLeft = 0;
+let exitActive = false;
+let gameState = 'welcome'; // 'welcome', 'playing', 'win', 'lose'
+// --- Maze Generation (Recursive Backtracking) ---
+// This ensures the maze is always solvable and different each time.
+function generateMaze(width, height) {
+// 1. Start with a grid full of walls.
+let maze = Array(height).fill(null).map(() => Array(width).fill(1));
+function carve(cx, cy) {
+// 2. Define the four directions in a random order.
+const directions = [[0, -2], [0, 2], [-2, 0], [2, 0]];
+directions.sort(() => Math.random() - 0.5);
+// 3. For each direction...
+for (let [dx, dy] of directions) {
+const nx = cx + dx;
+const ny = cy + dy;
+// 4. Check if the new cell is within bounds and is a wall.
+if (ny >= 0 && ny < height && nx >= 0 && nx < width && maze[ny][nx] === 1) {
+// 5. Carve a path to it.
+maze[ny][nx] = 0; // Carve the new cell
+maze[cy + dy / 2][cx + dx / 2] = 0; // Carve the wall in between
+carve(nx, ny); // 6. Recurse from the new cell.
+}
+}
+}
+// Start carving from a random odd-numbered cell
+maze[1][1] = 0;
+carve(1, 1);
+// Define start and exit points
+player = { x: 1, y: 1 };
+exit = { x: width - 2, y: height - 2 };
+maze[exit.y][exit.x] = 2; // Use '2' to represent the exit tile
+return maze;
+}
+
+function isBlockedCell(x, y) {
+if (x < 0 || x >= MAZE_WIDTH || y < 0 || y >= MAZE_HEIGHT) return true;
+return maze[y][x] === 1;
+}
+
+function getPathCells() {
+const cells = [];
+for (let y = 1; y < MAZE_HEIGHT - 1; y++) {
+for (let x = 1; x < MAZE_WIDTH - 1; x++) {
+if (maze[y][x] !== 1 && !(x === player.x && y === player.y) && !(x === exit.x && y === exit.y)) {
+cells.push({ x, y });
+}
+}
+}
+return cells;
+}
+
+function pickRandomCells(count, blockedSet = new Set()) {
+const candidates = getPathCells().filter((cell) => !blockedSet.has(`${cell.x},${cell.y}`));
+for (let i = candidates.length - 1; i > 0; i--) {
+const j = Math.floor(Math.random() * (i + 1));
+[candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+}
+return candidates.slice(0, Math.min(count, candidates.length));
+}
+
+function spawnCoins() {
+coins = pickRandomCells(COIN_COUNT);
+coinsLeft = coins.length;
+exitActive = coinsLeft === 0;
+}
+
+function spawnPowerUps() {
+const blocked = new Set(coins.map((c) => `${c.x},${c.y}`));
+const cells = pickRandomCells(POWER_UP_COUNT, blocked);
+powerUps = cells.map((cell) => ({ ...cell, type: 'time' }));
+}
+
+function getGuardMoveOptions(x, y) {
+const directions = [
+{ dx: 1, dy: 0 },
+{ dx: -1, dy: 0 },
+{ dx: 0, dy: 1 },
+{ dx: 0, dy: -1 }
+];
+
+return directions.filter((dir) => {
+const nx = x + dir.dx;
+const ny = y + dir.dy;
+if (isBlockedCell(nx, ny)) return false;
+if (nx === exit.x && ny === exit.y) return false;
+return true;
+});
+}
+
+function canPlaceGuardAt(x, y) {
+return getGuardMoveOptions(x, y).length > 0;
+}
+
+function chooseGuardPlacement(blockedSet = new Set()) {
+const guardCells = pickRandomCells(200, blockedSet);
+
+for (const cell of guardCells) {
+if (!canPlaceGuardAt(cell.x, cell.y)) continue;
+const options = getGuardMoveOptions(cell.x, cell.y);
+const direction = options[Math.floor(Math.random() * options.length)];
+return { x: cell.x, y: cell.y, dx: direction.dx, dy: direction.dy, stuckTicks: 0 };
+}
+
+return null;
+}
+
+function relocateGuard(guard) {
+const blocked = new Set([
+`${player.x},${player.y}`,
+`${exit.x},${exit.y}`,
+...coins.map((c) => `${c.x},${c.y}`),
+...powerUps.map((p) => `${p.x},${p.y}`),
+...guards.filter((g) => g !== guard).map((g) => `${g.x},${g.y}`),
+]);
+
+const placement = chooseGuardPlacement(blocked);
+if (!placement) {
+guard.stuckTicks = 0;
+return;
+}
+
+guard.x = placement.x;
+guard.y = placement.y;
+guard.dx = placement.dx;
+guard.dy = placement.dy;
+guard.stuckTicks = 0;
+}
+
+function spawnGuards() {
+const blocked = new Set([
+...coins.map((c) => `${c.x},${c.y}`),
+...powerUps.map((p) => `${p.x},${p.y}`),
+]);
+guards = [];
+
+for (let i = 0; i < GUARD_COUNT; i++) {
+const placement = chooseGuardPlacement(blocked);
+if (!placement) break;
+guards.push(placement);
+blocked.add(`${placement.x},${placement.y}`);
+}
+}
+
+function collectItems() {
+for (let i = coins.length - 1; i >= 0; i--) {
+if (coins[i].x === player.x && coins[i].y === player.y) {
+coins.splice(i, 1);
+coinsLeft = coins.length;
+if (coinsLeft === 0) {
+exitActive = true;
+}
+}
+}
+
+for (let i = powerUps.length - 1; i >= 0; i--) {
+if (powerUps[i].x === player.x && powerUps[i].y === player.y) {
+if (powerUps[i].type === 'time') {
+gameTimer += 30;
+}
+powerUps.splice(i, 1);
+}
+}
+}
+
+function checkGuardCollision() {
+for (const guard of guards) {
+if (guard.x === player.x && guard.y === player.y) {
+player.x = 1;
+player.y = 1;
+return;
+}
+}
+}
+
+function updateGuards(timestamp) {
+if (timestamp - lastGuardMoveTime < GUARD_MOVE_INTERVAL) return;
+lastGuardMoveTime = timestamp;
+
+const occupied = new Set(guards.map((g) => `${g.x},${g.y}`));
+
+for (const guard of guards) {
+occupied.delete(`${guard.x},${guard.y}`);
+
+const options = getGuardMoveOptions(guard.x, guard.y);
+if (options.length === 0) {
+guard.stuckTicks = (guard.stuckTicks || 0) + 1;
+if (guard.stuckTicks >= GUARD_STUCK_LIMIT) relocateGuard(guard);
+occupied.add(`${guard.x},${guard.y}`);
+continue;
+}
+
+const reverseDx = -guard.dx;
+const reverseDy = -guard.dy;
+let candidates = options.filter((dir) => !(dir.dx === reverseDx && dir.dy === reverseDy));
+if (candidates.length === 0) candidates = options;
+
+const forward = candidates.find((dir) => dir.dx === guard.dx && dir.dy === guard.dy);
+let selectedDirection;
+
+if (forward && candidates.length > 1 && Math.random() < 0.6) {
+selectedDirection = forward;
+} else {
+selectedDirection = candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+let nextX = guard.x + selectedDirection.dx;
+let nextY = guard.y + selectedDirection.dy;
+let nextKey = `${nextX},${nextY}`;
+let moved = false;
+
+if (!occupied.has(nextKey)) {
+guard.dx = selectedDirection.dx;
+guard.dy = selectedDirection.dy;
+guard.x = nextX;
+guard.y = nextY;
+moved = true;
+}
+
+if (moved) {
+guard.stuckTicks = 0;
+occupied.add(nextKey);
+} else {
+guard.stuckTicks = (guard.stuckTicks || 0) + 1;
+if (guard.stuckTicks >= GUARD_STUCK_LIMIT) {
+relocateGuard(guard);
+}
+occupied.add(`${guard.x},${guard.y}`);
+}
+}
+
+checkGuardCollision();
+}
+
+// --- Player Logic ---
+function movePlayer(dx, dy) {
+if (gameState !== 'playing') return;
+for (let step = 0; step < PLAYER_STEP_MULTIPLIER; step++) {
+const nextX = player.x + dx;
+const nextY = player.y + dy;
+
+if (nextX < 0 || nextX >= MAZE_WIDTH || nextY < 0 || nextY >= MAZE_HEIGHT) {
+return;
+}
+
+// Check for win condition
+if (nextX === exit.x && nextY === exit.y) {
+if (exitActive) {
+gameState = 'win';
+clearInterval(timerInterval);
+}
+return;
+}
+
+// Stop movement if next tile is blocked.
+if (isBlockedCell(nextX, nextY)) {
+return;
+}
+
+player.x = nextX;
+player.y = nextY;
+collectItems();
+checkGuardCollision();
+
+if (player.x === 1 && player.y === 1) {
+// Guard collision reset the player; stop extra step movement.
+return;
+}
+}
+}
+// --- Game Flow & Timer ---
+function startGame() {
+maze = generateMaze(MAZE_WIDTH, MAZE_HEIGHT);
+gameTimer = 300;
+gameState = 'playing';
+lastGuardMoveTime = 0;
+
+spawnCoins();
+spawnPowerUps();
+spawnGuards();
+// Clear any existing timer and start a new one
+if (timerInterval) clearInterval(timerInterval);
+timerInterval = setInterval(() => {
+gameTimer--;
+if (gameTimer <= 0) {
+gameState = 'lose';
+clearInterval(timerInterval);
+}
+}, 1000);
+}
+// --- Drawing / Rendering ---
+function drawMaze() {
+for (let y = 0; y < MAZE_HEIGHT; y++) {
+for (let x = 0; x < MAZE_WIDTH; x++) {
+if (maze[y][x] === 1) {
+ctx.fillStyle = colors.wall;
+} else if (maze[y][x] === 2) {
+ctx.fillStyle = exitActive ? colors.exitActive : colors.exitLocked;
+} else {
+ctx.fillStyle = colors.path;
+}
+ctx.fillRect(x * GRID_SIZE, y * GRID_SIZE, GRID_SIZE, GRID_SIZE);
+}
+}
+}
+
+function drawItems() {
+for (const coin of coins) {
+const cx = coin.x * GRID_SIZE + GRID_SIZE / 2;
+const cy = coin.y * GRID_SIZE + GRID_SIZE / 2;
+ctx.fillStyle = colors.coin;
+ctx.beginPath();
+ctx.arc(cx, cy, GRID_SIZE * 0.22, 0, Math.PI * 2);
+ctx.fill();
+ctx.strokeStyle = '#ffe98a';
+ctx.lineWidth = 2;
+ctx.stroke();
+}
+
+for (const powerUp of powerUps) {
+const px = powerUp.x * GRID_SIZE;
+const py = powerUp.y * GRID_SIZE;
+ctx.fillStyle = colors.powerUp;
+ctx.fillRect(px + 6, py + 6, GRID_SIZE - 12, GRID_SIZE - 12);
+ctx.fillStyle = '#001f33';
+ctx.font = '18px VT323';
+ctx.textAlign = 'center';
+ctx.fillText('+30', px + GRID_SIZE / 2, py + GRID_SIZE / 2 + 6);
+}
+}
+
+function drawGuards() {
+for (const guard of guards) {
+const gx = guard.x * GRID_SIZE;
+const gy = guard.y * GRID_SIZE;
+ctx.fillStyle = colors.guard;
+ctx.fillRect(gx + 4, gy + 4, GRID_SIZE - 8, GRID_SIZE - 8);
+ctx.fillStyle = '#ffd6de';
+ctx.fillRect(gx + 8, gy + 8, 4, 4);
+ctx.fillRect(gx + GRID_SIZE - 12, gy + 8, 4, 4);
+}
+}
+
+function drawPlayer() {
+ctx.fillStyle = colors.player;
+ctx.fillRect(player.x * GRID_SIZE, player.y * GRID_SIZE, GRID_SIZE, GRID_SIZE);
+}
+function drawUI() {
+const minutes = Math.floor(gameTimer / 60);
+const seconds = gameTimer % 60;
+const timeString = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, 
+'0')}`;
+ctx.fillStyle = '#fff';
+ctx.font = '28px VT323';
+ctx.textAlign = 'left';
+ctx.fillText(`Time: ${timeString}`, 14, 30);
+
+ctx.textAlign = 'center';
+ctx.fillStyle = '#ffd447';
+ctx.fillText(`Coins Left: ${coinsLeft}`, canvas.width / 2, 30);
+
+ctx.textAlign = 'right';
+ctx.fillStyle = exitActive ? '#00ff95' : '#ff7070';
+ctx.fillText(exitActive ? 'Exit: ACTIVE' : 'Exit: LOCKED', canvas.width - 14, 30);
+
+ctx.textAlign = 'left';
+ctx.fillStyle = '#79e8ff';
+ctx.font = '24px VT323';
+ctx.fillText('Robin', 12, canvas.height - 10);
+}
+function drawScreen(title, subtitle, color) {
+ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+ctx.fillRect(0, 0, canvas.width, canvas.height);
+ctx.fillStyle = color;
+ctx.textAlign = 'center';
+ctx.font = '80px VT323';
+ctx.fillText(title, canvas.width / 2, canvas.height / 2 - 40);
+ctx.fillStyle = '#fff';
+ctx.font = '40px VT323';
+ctx.fillText(subtitle, canvas.width / 2, canvas.height / 2 + 40);
+}
+
+function getDirectionFromKey(key) {
+switch (key) {
+case 'ArrowUp': return { key, dx: 0, dy: -1 };
+case 'ArrowDown': return { key, dx: 0, dy: 1 };
+case 'ArrowLeft': return { key, dx: -1, dy: 0 };
+case 'ArrowRight': return { key, dx: 1, dy: 0 };
+default: return null;
+}
+}
+
+function stopHoldMove() {
+if (holdMoveTimer) {
+clearInterval(holdMoveTimer);
+holdMoveTimer = null;
+}
+if (holdMoveStartTimer) {
+clearTimeout(holdMoveStartTimer);
+holdMoveStartTimer = null;
+}
+activeDirectionKey = null;
+}
+
+function startHoldMove(direction) {
+stopHoldMove();
+activeDirectionKey = direction.key;
+
+holdMoveStartTimer = setTimeout(() => {
+holdMoveTimer = setInterval(() => {
+if (gameState !== 'playing') return;
+movePlayer(direction.dx, direction.dy);
+}, HOLD_MOVE_INTERVAL);
+}, HOLD_MOVE_START_DELAY);
+}
+// --- Main Game Loop ---
+function gameLoop() {
+// Clear the canvas
+ctx.clearRect(0, 0, canvas.width, canvas.height);
+if (gameState === 'welcome') {
+drawScreen('Maze Adventure', 'Collect all coins, then reach exit', '#ffd447');
+} else if (gameState === 'playing') {
+updateGuards(performance.now());
+drawMaze();
+drawItems();
+drawGuards();
+drawPlayer();
+drawUI();
+} else if (gameState === 'win') {
+drawScreen('You Escaped!', 'Click to Play Again', '#00ff00');
+} else if (gameState === 'lose') {
+drawScreen("Time's Up!", 'Click to Try Again', '#ff0000');
+}
+requestAnimationFrame(gameLoop);
+}
+// --- Event Listeners ---
+window.addEventListener('keydown', (e) => {
+const direction = getDirectionFromKey(e.key);
+if (!direction) return;
+
+if (activeDirectionKey === direction.key) {
+// Ignore key repeat events for the same held direction.
+return;
+}
+
+movePlayer(direction.dx, direction.dy);
+startHoldMove(direction);
+});
+
+window.addEventListener('keyup', (e) => {
+if (e.key === activeDirectionKey) {
+stopHoldMove();
+}
+});
+
+window.addEventListener('blur', () => {
+stopHoldMove();
+});
+canvas.addEventListener('click', () => {
+if (gameState !== 'playing') {
+stopHoldMove();
+startGame();
+}
+});
+// --- Start the game ---
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Robin's Game Arcade</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=VT323&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg1: #071120;
+    --bg2: #1a0938;
+    --panel: rgba(8, 12, 28, 0.82);
+    --line: #2de2e6;
+    --accent: #ffcf56;
+    --text: #e8f3ff;
+    --muted: #9ab6d9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: "VT323", monospace;
+    color: var(--text);
+    background:
+      radial-gradient(1000px 600px at 12% 8%, #224a8c55 0%, transparent 60%),
+      radial-gradient(1000px 600px at 90% 80%, #8f2edb44 0%, transparent 55%),
+      linear-gradient(135deg, var(--bg1), var(--bg2));
+    display: grid;
+    place-items: center;
+    padding: 28px;
+  }
+  .shell {
+    width: min(980px, 100%);
+    border: 2px solid var(--line);
+    border-radius: 14px;
+    background: var(--panel);
+    box-shadow: 0 0 24px #2de2e655;
+    overflow: hidden;
+  }
+  .top {
+    padding: 22px 22px 14px;
+    border-bottom: 1px solid #2de2e640;
+  }
+  h1 {
+    margin: 0;
+    font-family: "Orbitron", sans-serif;
+    letter-spacing: 1px;
+    color: var(--accent);
+    font-size: clamp(28px, 4vw, 40px);
+  }
+  .sub {
+    margin-top: 8px;
+    color: var(--muted);
+    font-size: clamp(20px, 2.4vw, 26px);
+  }
+  .grid {
+    padding: 18px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+  }
+  .card {
+    display: block;
+    text-decoration: none;
+    color: var(--text);
+    border: 1px solid #2de2e666;
+    border-radius: 10px;
+    padding: 14px;
+    background: linear-gradient(160deg, #0f1a37, #0a1328);
+    transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+  }
+  .card:hover {
+    transform: translateY(-2px);
+    border-color: var(--accent);
+    box-shadow: 0 8px 20px #0008;
+  }
+  .title {
+    font-family: "Orbitron", sans-serif;
+    font-size: 18px;
+    color: var(--accent);
+  }
+  .desc {
+    margin-top: 8px;
+    color: var(--muted);
+    font-size: 22px;
+    line-height: 1.2;
+  }
+  .foot {
+    padding: 12px 18px 18px;
+    color: #b6cff0;
+    font-size: 20px;
+    border-top: 1px solid #2de2e640;
+  }
+</style>
+</head>
+<body>
+  <main class="shell">
+    <section class="top">
+      <h1>Robin's Game Arcade</h1>
+      <div class="sub">CPS 3500 - Unit 7 Projects</div>
+    </section>
+    <section class="grid">
+      <a class="card" href="brick.html">
+        <div class="title">Breakout</div>
+        <div class="desc">Brick-breaking arcade with leaderboard and restart flow.</div>
+      </a>
+      <a class="card" href="spaceShoot.html">
+        <div class="title">Space Shooter</div>
+        <div class="desc">Fast shooter with enemies, power-ups, and boss fights.</div>
+      </a>
+      <a class="card" href="maze.html">
+        <div class="title">Maze Adventure</div>
+        <div class="desc">Collect coins, avoid guards, and unlock the exit before time runs out.</div>
+      </a>
+      <a class="card" href="PVZ2Floors.html">
+        <div class="title">Dual Defense PVZ</div>
+        <div class="desc">Two-map tower defense with cards, sun economy, and boss waves.</div>
+      </a>
+    </section>
+    <section class="foot">
+      Created by Robin Luo Yueyang
+    </section>
+  </main>
+</body>
+</html>

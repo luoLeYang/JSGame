@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Dual Defense: Plants vs Zombies</title>
+
+<style>
+
+body{
+    text-align:center;
+    font-family:Arial;
+    background:#222;
+    color:white;
+}
+
+h1{
+    margin-bottom:5px;
+}
+
+#topbar{
+    margin:10px;
+}
+
+#instructions{
+    margin-top:10px;
+    font-size:16px;
+    color:#ffd447;
+}
+
+#cards{
+    margin-top:10px;
+    display:flex;
+    justify-content:center;
+    gap:10px;
+}
+
+.card{
+    border:2px solid #aaa;
+    background:#333;
+    color:white;
+    padding:8px 10px;
+    cursor:pointer;
+    min-width:170px;
+}
+
+.card.selected{
+    border-color:#ffd447;
+    box-shadow:0 0 10px #ffd447;
+}
+
+button{
+    padding:8px 15px;
+    font-size:16px;
+    margin:5px;
+}
+
+#shovelButton.active{
+    background:#ff7b7b;
+    color:white;
+    box-shadow:0 0 12px #ff7b7b;
+}
+
+canvas{
+    border:4px solid white;
+    background-size:cover;
+}
+
+#message{
+    font-size:40px;
+    color:yellow;
+    margin-top:20px;
+}
+
+</style>
+</head>
+
+<body>
+
+<h1>Dual Defense: Plants vs Zombies</h1>
+<h3>Created by Luo Yueyang</h3>
+
+<div id="topbar">
+Sun: <span id="sun">75</span>
+<br><br>
+Current Map: <span id="mapName">Rooftop</span>
+<br>
+<button onclick="switchMap()">Switch Map</button>
+<button onclick="restartGame()">Restart</button>
+<button id="shovelButton" onclick="toggleShovelMode()">Shovel</button>
+
+<div id="instructions">Press P to pause/resume. Click Shovel, then click a plant to remove it.</div>
+
+<div id="cards">
+    <button class="card selected" id="sunflowerCard" onclick="selectPlant('sunflower')">
+        Sunflower (25)<br>Small: +25/15s -> Big after 20s: +50/15s
+    </button>
+    <button class="card" id="peashooterCard" onclick="selectPlant('peashooter')">
+        Peashooter (50)<br>1 pea / sec, dmg 1
+    </button>
+</div>
+</div>
+
+<canvas id="gameCanvas" width="900" height="500"></canvas>
+
+<div id="message"></div>
+
+<script>
+
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+const backgroundMusic = new Audio("./PVZBackgroundMusic.mp3");
+
+backgroundMusic.loop = true;
+backgroundMusic.volume = 0.4;
+
+const rows = 5;
+const cols = 9;
+
+const cellWidth = 100;
+const cellHeight = 100;
+
+const NORMAL_SPAWN_INTERVAL = 4000;
+const EARLY_SPAWN_INTERVAL = NORMAL_SPAWN_INTERVAL * 3;
+const MASS_ATTACK_DELAY = 60000;
+
+let sun = 75;
+
+let currentMap = "roof";
+
+let wave = 1;
+let maxWaves = 3;
+
+let gameOver = false;
+let massAttackStarted = false;
+let spawnTimer = null;
+let waveTimer = null;
+let bossSpawned = { roof: false, house: false };
+let paused = false;
+let pauseStartedAt = 0;
+let roundStartTime = 0;
+let shovelMode = false;
+
+let plantsRoof = [];
+let plantsHouse = [];
+
+let zombiesRoof = [];
+let zombiesHouse = [];
+
+let peasRoof = [];
+let peasHouse = [];
+
+let selectedPlantType = "sunflower";
+
+const PLANT_CONFIG = {
+    sunflower: {
+        cost: 25,
+        produceInterval: 15000,
+        smallProduceAmount: 25,
+        bigProduceAmount: 50,
+        growTime: 20000
+    },
+    peashooter: { cost: 50, shootInterval: 1000, peaDamage: 1 }
+};
+
+const BOSS_CONFIG = {
+    hp: 20,
+    speedMultiplier: 0.75,
+    width: 80,
+    height: 80,
+    color: "#8000c0"
+};
+
+function startBackgroundMusic(){
+
+    if(!backgroundMusic.paused) return;
+
+    backgroundMusic.play().catch(()=>{});
+
+}
+
+function restartBackgroundMusic(){
+
+    backgroundMusic.currentTime = 0;
+    startBackgroundMusic();
+
+}
+
+function shiftPlantTimers(duration){
+
+    const adjustPlants = (plants)=>{
+        for(let r=0;r<rows;r++){
+            for(let c=0;c<cols;c++){
+                const plant = plants[r][c];
+                if(!plant) continue;
+
+                plant.plantedAt += duration;
+                plant.lastProduce += duration;
+                plant.lastShoot += duration;
+            }
+        }
+    };
+
+    adjustPlants(plantsRoof);
+    adjustPlants(plantsHouse);
+
+}
+
+function drawPauseOverlay(){
+
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = "#ffe066";
+    ctx.font = "56px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("PAUSED", canvas.width / 2, canvas.height / 2);
+
+    ctx.font = "24px Arial";
+    ctx.fillText("Press P to continue", canvas.width / 2, canvas.height / 2 + 40);
+
+}
+
+function togglePause(){
+
+    if(gameOver) return;
+
+    paused = !paused;
+
+    if(paused){
+        pauseStartedAt = Date.now();
+        backgroundMusic.pause();
+        return;
+    }
+
+    const pausedDuration = Date.now() - pauseStartedAt;
+    roundStartTime += pausedDuration;
+    shiftPlantTimers(pausedDuration);
+    startBackgroundMusic();
+
+}
+
+function setShovelButtonState(){
+    document.getElementById("shovelButton").classList.toggle("active", shovelMode);
+}
+
+function toggleShovelMode(){
+    shovelMode = !shovelMode;
+    setShovelButtonState();
+}
+
+for(let r=0;r<rows;r++){
+    plantsRoof[r]=Array(cols).fill(null);
+    plantsHouse[r]=Array(cols).fill(null);
+}
+
+function drawGrid(){
+
+
+}
+
+function drawPlants(){
+
+    let plants = currentMap==="roof" ? plantsRoof : plantsHouse;
+
+    for(let r=0;r<rows;r++){
+        for(let c=0;c<cols;c++){
+
+            const plant = plants[r][c];
+            if(!plant) continue;
+
+            if(plant.type === "sunflower"){
+                const isBigSunflower = plant.stage === "big";
+                const flowerRadius = isBigSunflower ? 25 : 16;
+                const centerRadius = isBigSunflower ? 10 : 7;
+
+                ctx.fillStyle="#ffdd55";
+                ctx.beginPath();
+                ctx.arc(c*cellWidth+50, r*cellHeight+50, flowerRadius, 0, Math.PI*2);
+                ctx.fill();
+
+                ctx.fillStyle="#aa7700";
+                ctx.beginPath();
+                ctx.arc(c*cellWidth+50, r*cellHeight+50, centerRadius, 0, Math.PI*2);
+                ctx.fill();
+            }
+
+            if(plant.type === "peashooter"){
+                ctx.fillStyle="#00aa00";
+                ctx.beginPath();
+                ctx.arc(c*cellWidth+50, r*cellHeight+50, 25, 0, Math.PI*2);
+                ctx.fill();
+
+                ctx.fillStyle="#006600";
+                ctx.fillRect(c*cellWidth+62, r*cellHeight+44, 22, 12);
+            }
+
+        }
+    }
+
+}
+
+function drawZombies(){
+
+    let zombies = currentMap==="roof" ? zombiesRoof : zombiesHouse;
+
+    zombies.forEach(z=>{
+        if(z.isBoss){
+            ctx.fillStyle = BOSS_CONFIG.color;
+            ctx.fillRect(z.x, z.y, z.width, z.height);
+
+            ctx.fillStyle = "red";
+            ctx.fillRect(z.x + 16, z.y + 20, 10, 10);
+            ctx.fillRect(z.x + z.width - 26, z.y + 20, 10, 10);
+        } else {
+            ctx.fillStyle="purple";
+            ctx.fillRect(z.x, z.y, z.width, z.height);
+        }
+
+    });
+
+}
+
+function createNormalZombie(row, mapName){
+    return {
+        x:canvas.width,
+        y:row*cellHeight+10,
+        row:row,
+        map:mapName,
+        hp:5,
+        speedMultiplier:1,
+        width:40,
+        height:80,
+        isBoss:false
+    };
+}
+
+function createBossZombie(row, mapName){
+    return {
+        x:canvas.width,
+        y:row*cellHeight + (cellHeight - BOSS_CONFIG.height) / 2,
+        row:row,
+        map:mapName,
+        hp:BOSS_CONFIG.hp,
+        speedMultiplier:BOSS_CONFIG.speedMultiplier,
+        width:BOSS_CONFIG.width,
+        height:BOSS_CONFIG.height,
+        isBoss:true
+    };
+}
+
+function spawnBoss(mapName){
+    const row = Math.floor(Math.random()*rows);
+
+    if(mapName === "roof"){
+        zombiesRoof.push(createBossZombie(row, "roof"));
+    } else {
+        zombiesHouse.push(createBossZombie(row, "house"));
+    }
+}
+
+function drawPeas(){
+
+    const peas = currentMap === "roof" ? peasRoof : peasHouse;
+
+    peas.forEach(p=>{
+        ctx.fillStyle = "#66ff66";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+}
+
+function spawnZombie(){
+
+    if(gameOver || paused) return;
+
+    let row = Math.floor(Math.random()*rows);
+    zombiesRoof.push(createNormalZombie(row, "roof"));
+
+    let row2 = Math.floor(Math.random()*rows);
+
+    zombiesHouse.push(createNormalZombie(row2, "house"));
+
+}
+
+function startZombieSpawner(interval){
+
+    if(spawnTimer){
+        clearInterval(spawnTimer);
+    }
+
+    spawnTimer = setInterval(spawnZombie, interval);
+
+}
+
+function clearRoundTimers(){
+
+    if(spawnTimer){
+        clearInterval(spawnTimer);
+        spawnTimer = null;
+    }
+
+    if(waveTimer){
+        clearInterval(waveTimer);
+        waveTimer = null;
+    }
+
+}
+
+function startRoundTimers(){
+
+    startZombieSpawner(EARLY_SPAWN_INTERVAL);
+
+    waveTimer = setInterval(()=>{
+
+        if(!gameOver && !paused){
+
+            wave++;
+
+            if(wave>maxWaves){
+                checkVictory();
+            }
+
+        }
+
+    },20000);
+
+}
+
+function createPlantGrid(){
+    return Array.from({ length: rows }, () => Array(cols).fill(null));
+}
+
+function restartGame(){
+
+    clearRoundTimers();
+
+    restartBackgroundMusic();
+
+    sun = 75;
+    currentMap = "roof";
+    wave = 1;
+    gameOver = false;
+    massAttackStarted = false;
+    paused = false;
+    pauseStartedAt = 0;
+    roundStartTime = Date.now();
+    shovelMode = false;
+    bossSpawned = { roof: false, house: false };
+
+    plantsRoof = createPlantGrid();
+    plantsHouse = createPlantGrid();
+
+    zombiesRoof = [];
+    zombiesHouse = [];
+    peasRoof = [];
+    peasHouse = [];
+
+    document.getElementById("mapName").innerText = "Rooftop";
+    document.getElementById("message").innerText = "";
+
+    selectPlant("sunflower");
+    setShovelButtonState();
+    updateSun();
+    drawBackground();
+    startRoundTimers();
+
+}
+
+function startMassAttack(){
+
+    if(gameOver || massAttackStarted) return;
+
+    massAttackStarted = true;
+    startZombieSpawner(NORMAL_SPAWN_INTERVAL);
+
+    if(!bossSpawned.roof){
+        spawnBoss("roof");
+        bossSpawned.roof = true;
+    }
+
+    if(!bossSpawned.house){
+        spawnBoss("house");
+        bossSpawned.house = true;
+    }
+
+    const message = document.getElementById("message");
+    message.innerText = "Massive attack has started!";
+
+    setTimeout(()=>{
+        if(!gameOver && message.innerText === "Massive attack has started!"){
+            message.innerText = "";
+        }
+    }, 2500);
+
+}
+
+function updatePlants(now){
+
+    const updateOneMap = (plants, zombies, peas)=>{
+
+        for(let r=0;r<rows;r++){
+            for(let c=0;c<cols;c++){
+                const plant = plants[r][c];
+                if(!plant) continue;
+
+                if(plant.type === "sunflower"){
+                    if(plant.stage === "small" && now - plant.plantedAt >= PLANT_CONFIG.sunflower.growTime){
+                        plant.stage = "big";
+                    }
+
+                    if(now - plant.lastProduce >= PLANT_CONFIG.sunflower.produceInterval){
+                        const producedSun = plant.stage === "big"
+                            ? PLANT_CONFIG.sunflower.bigProduceAmount
+                            : PLANT_CONFIG.sunflower.smallProduceAmount;
+                        sun += producedSun;
+                        plant.lastProduce = now;
+                    }
+                }
+
+                if(plant.type === "peashooter"){
+                    const hasZombieAhead = zombies.some(z => z.row === r && z.x > c * cellWidth);
+                    if(hasZombieAhead && now - plant.lastShoot >= PLANT_CONFIG.peashooter.shootInterval){
+                        peas.push({
+                            x:c*cellWidth+70,
+                            y:r*cellHeight+50,
+                            row:r,
+                            damage:PLANT_CONFIG.peashooter.peaDamage
+                        });
+                        plant.lastShoot = now;
+                    }
+                }
+            }
+        }
+    };
+
+    updateOneMap(plantsRoof, zombiesRoof, peasRoof);
+    updateOneMap(plantsHouse, zombiesHouse, peasHouse);
+
+}
+
+function updatePeas(){
+
+    const process = (peas, zombies)=>{
+        for(let i=peas.length-1;i>=0;i--){
+            const p = peas[i];
+            p.x += 6;
+
+            if(p.x > canvas.width){
+                peas.splice(i,1);
+                continue;
+            }
+
+            let hitIndex = -1;
+
+            for(let z=0;z<zombies.length;z++){
+                const zombie = zombies[z];
+                if(zombie.row !== p.row) continue;
+
+                if(p.x >= zombie.x && p.x <= zombie.x + zombie.width && p.y >= zombie.y && p.y <= zombie.y + zombie.height){
+                    hitIndex = z;
+                    break;
+                }
+            }
+
+            if(hitIndex !== -1){
+                zombies[hitIndex].hp -= p.damage;
+                peas.splice(i,1);
+
+                if(zombies[hitIndex].hp <= 0){
+                    zombies.splice(hitIndex,1);
+                }
+            }
+        }
+    };
+
+    process(peasRoof, zombiesRoof);
+    process(peasHouse, zombiesHouse);
+
+}
+
+function moveZombies(){
+
+    zombiesRoof.forEach(z=>{
+
+        const normalSpeed = 0.4 + wave*0.2;
+        z.x -= normalSpeed * z.speedMultiplier;
+
+        let col = Math.floor(z.x/cellWidth);
+
+        if(col>=0){
+
+            if(plantsRoof[z.row][col]){
+
+                z.x += 0.5;
+
+            }
+
+        }
+
+        if(z.x<=0){
+
+            endGame();
+
+        }
+
+    });
+
+    zombiesHouse.forEach(z=>{
+
+        const normalSpeed = 0.4 + wave*0.2;
+        z.x -= normalSpeed * z.speedMultiplier;
+
+        let col = Math.floor(z.x/cellWidth);
+
+        if(col>=0){
+
+            if(plantsHouse[z.row][col]){
+
+                z.x += 0.5;
+
+            }
+
+        }
+
+        if(z.x<=0){
+
+            endGame();
+
+        }
+
+    });
+
+}
+
+function selectPlant(type){
+
+    selectedPlantType = type;
+    shovelMode = false;
+    setShovelButtonState();
+
+    document.getElementById("sunflowerCard").classList.toggle("selected", type === "sunflower");
+    document.getElementById("peashooterCard").classList.toggle("selected", type === "peashooter");
+
+}
+
+function drawBackground(){
+
+    if(currentMap==="roof"){
+
+        canvas.style.background="url('https://www.manpingou.com/uploads/allimg/190313/25-1Z3131146121E.jpg')";
+        canvas.style.backgroundSize="cover";
+        canvas.style.backgroundPosition="center";
+
+    }
+    else{
+
+        canvas.style.background="url('https://img.freepik.com/premium-photo/serene-garden-path_107062-22152.jpg')";
+        canvas.style.backgroundSize="cover";
+        canvas.style.backgroundPosition="center";
+
+    }
+
+}
+
+function updateSun(){
+
+    document.getElementById("sun").innerText = sun;
+
+}
+
+canvas.addEventListener("click",function(e){
+
+    startBackgroundMusic();
+
+    if(gameOver || paused) return;
+
+    let rect = canvas.getBoundingClientRect();
+
+    let x = e.clientX - rect.left;
+    let y = e.clientY - rect.top;
+
+    let col = Math.floor(x/cellWidth);
+    let row = Math.floor(y/cellHeight);
+
+    if(row<0 || row>=rows || col<0 || col>=cols) return;
+
+    const targetPlants = currentMap === "roof" ? plantsRoof : plantsHouse;
+
+    if(shovelMode){
+        if(targetPlants[row][col]){
+            targetPlants[row][col] = null;
+            shovelMode = false;
+            setShovelButtonState();
+        }
+        return;
+    }
+
+    const config = PLANT_CONFIG[selectedPlantType];
+
+    if(sun >= config.cost){
+
+        if(!targetPlants[row][col]){
+
+            targetPlants[row][col] = {
+                type:selectedPlantType,
+                stage:selectedPlantType === "sunflower" ? "small" : null,
+                plantedAt:Date.now(),
+                lastProduce:Date.now(),
+                lastShoot:Date.now()
+            };
+
+            sun -= config.cost;
+
+        }
+
+    }
+
+});
+
+document.addEventListener("pointerdown", startBackgroundMusic);
+
+window.addEventListener("keydown",(e)=>{
+    if(e.key === "p" || e.key === "P"){
+        togglePause();
+    }
+});
+
+function switchMap(){
+
+    if(currentMap==="roof"){
+
+        currentMap="house";
+        document.getElementById("mapName").innerText="Yard";
+
+    }
+    else{
+
+        currentMap="roof";
+        document.getElementById("mapName").innerText="Rooftop";
+
+    }
+
+}
+
+function endGame(){
+
+    if(gameOver) return;
+
+    gameOver=true;
+
+    backgroundMusic.pause();
+
+    clearRoundTimers();
+
+    document.getElementById("message").innerText =
+    "Zombies have eaten your brains!";
+
+}
+
+function checkVictory(){
+
+    if(wave>maxWaves && zombiesRoof.length===0 && zombiesHouse.length===0){
+
+        gameOver=true;
+
+        document.getElementById("message").innerText =
+        "Congratulations! You defended the house!";
+
+    }
+
+}
+
+function update(){
+
+    if(gameOver) return;
+
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    drawBackground();
+
+    drawGrid();
+
+    drawPlants();
+
+    drawPeas();
+
+    drawZombies();
+
+    if(paused){
+        drawPauseOverlay();
+        return;
+    }
+
+    if(!massAttackStarted && Date.now() - roundStartTime >= MASS_ATTACK_DELAY){
+        startMassAttack();
+    }
+
+    updatePlants(Date.now());
+
+    updatePeas();
+
+    moveZombies();
+
+    updateSun();
+
+    checkVictory();
+
+}
+
+setInterval(update,30);
+
+restartGame();
+
+</script>
+
+</body>
+</html>

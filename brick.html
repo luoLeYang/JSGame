@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Break Out - Robin</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js"></script>
+
+<style>
+
+body{
+margin:0;
+display:flex;
+justify-content:center;
+align-items:center;
+height:100vh;
+background:#111;
+font-family:'Press Start 2P',cursive;
+color:white;
+}
+
+canvas{
+border:4px solid white;
+}
+
+#game-container{
+text-align:center;
+}
+
+h1{
+color:#ffff00;
+text-shadow:3px 3px #ff00ff;
+}
+
+</style>
+</head>
+
+<body>
+
+<div id="game-container">
+<h1>Break Out - Robin</h1>
+<canvas id="gameCanvas"></canvas>
+</div>
+
+<script>
+
+// CANVAS
+const canvas = document.getElementById("gameCanvas")
+const ctx = canvas.getContext("2d")
+
+canvas.width = 800
+canvas.height = 600
+
+// GAME STATE
+let score = 0
+let lives = 10
+let level = 1
+let paused = false
+let gameOver = false
+let gameStarted = false
+
+const INITIAL_LIVES = 10
+const INITIAL_BALL_SPEED = 3
+
+// HIGH SCORES
+let highScores = JSON.parse(localStorage.getItem("breakoutScores")) || []
+
+// SOUNDS
+function makeSafeSynth(){
+if(typeof Tone !== "undefined"){
+return new Tone.Synth({ volume: -18 }).toDestination()
+}
+
+// Fallback so gameplay continues even if audio library fails to load.
+return { triggerAttackRelease(){} }
+}
+
+const wallSound = makeSafeSynth()
+const brickSound = makeSafeSynth()
+const paddleSound = makeSafeSynth()
+
+const backgroundMusic = new Audio("./backgroundMusic.mp3")
+backgroundMusic.loop = true
+backgroundMusic.volume = 0.35
+
+function startBackgroundMusic(){
+if(!backgroundMusic.paused) return
+
+backgroundMusic.play().catch(()=>{
+// Ignore play rejection so game still runs if browser blocks autoplay.
+})
+}
+
+// PARTICLES (EDEN STYLE)
+let particles = []
+
+for(let i=0;i<40;i++){
+particles.push({
+x:Math.random()*canvas.width,
+y:Math.random()*canvas.height,
+size:Math.random()*3+1,
+speed:Math.random()*0.5+0.2
+})
+}
+
+// POWERUPS
+let powerUps = []
+
+// PADDLE
+const paddle={
+width:120,
+height:20,
+x:canvas.width/2-60,
+y:canvas.height-40,
+dx:0,
+speed:8,
+
+draw(){
+ctx.fillStyle="#00ffff"
+ctx.fillRect(this.x,this.y,this.width,this.height)
+},
+
+update(){
+this.x+=this.dx
+if(this.x<0) this.x=0
+if(this.x+this.width>canvas.width) this.x=canvas.width-this.width
+}
+}
+
+// BALL
+const ball={
+size:12,
+x:canvas.width/2,
+y:canvas.height/2,
+dx:INITIAL_BALL_SPEED,
+dy:-INITIAL_BALL_SPEED,
+speed:INITIAL_BALL_SPEED,
+
+draw(){
+
+ctx.beginPath()
+ctx.arc(this.x,this.y,this.size,0,Math.PI*2)
+
+ctx.shadowColor="yellow"
+ctx.shadowBlur=10
+
+ctx.fillStyle="yellow"
+ctx.fill()
+ctx.closePath()
+
+ctx.shadowBlur=0
+},
+
+update(){
+
+this.x+=this.dx
+this.y+=this.dy
+
+// WALLS
+if(this.x+this.size>canvas.width || this.x-this.size<0){
+this.dx*=-1
+wallSound.triggerAttackRelease("C4","8n")
+}
+
+if(this.y-this.size<0){
+this.dy*=-1
+}
+
+if(this.y+this.size>canvas.height){
+
+lives--
+
+if(lives==0){
+gameOver=true
+checkHighScore()
+}else{
+resetBall()
+}
+
+}
+
+// PADDLE
+if(
+this.y+this.size>paddle.y &&
+this.x>paddle.x &&
+this.x<paddle.x+paddle.width
+){
+this.dy*=-1
+paddleSound.triggerAttackRelease("G4","8n")
+}
+
+}
+
+}
+
+// BRICKS
+let bricks=[]
+
+const brickInfo={
+rows:5,
+cols:9,
+width:75,
+height:20,
+padding:10,
+offsetX:45,
+offsetY:60
+}
+
+function createBricks(){
+
+bricks=[]
+
+for(let r=0;r<brickInfo.rows;r++){
+
+for(let c=0;c<brickInfo.cols;c++){
+
+let x=c*(brickInfo.width+brickInfo.padding)+brickInfo.offsetX
+let y=r*(brickInfo.height+brickInfo.padding)+brickInfo.offsetY
+
+bricks.push({x,y})
+
+}
+
+}
+
+}
+
+createBricks()
+
+// BACKGROUND
+function drawBackground(){
+
+let gradient=ctx.createLinearGradient(0,0,0,canvas.height)
+
+gradient.addColorStop(0,"#6ec6ff")
+gradient.addColorStop(0.5,"#8ed081")
+gradient.addColorStop(1,"#1b5e20")
+
+ctx.fillStyle=gradient
+ctx.fillRect(0,0,canvas.width,canvas.height)
+
+// lake
+ctx.fillStyle="#2a9df4"
+ctx.fillRect(0,350,canvas.width,250)
+
+}
+
+// PARTICLES
+function drawParticles(){
+
+particles.forEach(p=>{
+
+ctx.beginPath()
+ctx.arc(p.x,p.y,p.size,0,Math.PI*2)
+ctx.fillStyle="rgba(255,255,255,0.6)"
+ctx.fill()
+
+p.y+=p.speed
+
+if(p.y>canvas.height){
+p.y=0
+p.x=Math.random()*canvas.width
+}
+
+})
+
+}
+
+// BRICKS DRAW
+function drawBricks(){
+
+bricks.forEach(b=>{
+ctx.fillStyle="#ff4444"
+ctx.fillRect(b.x,b.y,brickInfo.width,brickInfo.height)
+})
+
+}
+
+// POWERUPS
+function updatePowerUps(){
+
+powerUps.forEach((p,i)=>{
+
+p.y+=2
+
+ctx.fillStyle="magenta"
+ctx.fillRect(p.x,p.y,15,15)
+
+if(
+p.y>paddle.y &&
+p.x>paddle.x &&
+p.x<paddle.x+paddle.width
+){
+
+activatePowerUp(p.type)
+powerUps.splice(i,1)
+
+}
+
+})
+
+}
+
+function activatePowerUp(type){
+
+if(type=="wide"){
+
+paddle.width*=1.5
+
+setTimeout(()=>{
+paddle.width/=1.5
+},8000)
+
+}
+
+if(type=="slow"){
+
+ball.dx*=0.7
+ball.dy*=0.7
+
+setTimeout(()=>{
+ball.dx/=0.7
+ball.dy/=0.7
+},8000)
+
+}
+
+if(type=="sticky"){
+
+ball.dx=0
+ball.dy=0
+
+canvas.addEventListener("click",()=>{
+ball.dx=ball.speed
+ball.dy=-ball.speed
+},{once:true})
+
+}
+
+}
+
+// COLLISIONS
+function checkBrickCollision(){
+
+bricks.forEach((b,i)=>{
+
+if(
+ball.x>b.x &&
+ball.x<b.x+brickInfo.width &&
+ball.y>b.y &&
+ball.y<b.y+brickInfo.height
+){
+
+ball.dy*=-1
+
+bricks.splice(i,1)
+
+score+=100
+
+brickSound.triggerAttackRelease("A5","8n")
+
+// POWERUP DROP
+if(Math.random()<0.3){
+
+let types=["wide","slow","sticky"]
+
+powerUps.push({
+x:b.x+30,
+y:b.y,
+type:types[Math.floor(Math.random()*3)]
+})
+
+}
+
+}
+
+})
+
+}
+
+// UI
+function drawUI(){
+
+ctx.fillStyle="white"
+ctx.font='16px "Press Start 2P"'
+
+ctx.fillText("Score: "+score,20,30)
+ctx.fillText("Lives: "+lives,600,30)
+
+}
+
+// PAUSE
+function drawPaused(){
+
+ctx.fillStyle="rgba(0,0,0,0.6)"
+ctx.fillRect(0,0,canvas.width,canvas.height)
+
+ctx.fillStyle="yellow"
+ctx.font='40px "Press Start 2P"'
+ctx.textAlign="center"
+
+ctx.fillText("PAUSED",canvas.width/2,canvas.height/2)
+
+}
+
+// GAME OVER
+function drawGameOver(){
+
+ctx.fillStyle="rgba(0,0,0,0.8)"
+ctx.fillRect(0,0,canvas.width,canvas.height)
+
+ctx.fillStyle="red"
+ctx.font='40px "Press Start 2P"'
+ctx.textAlign="center"
+
+ctx.fillText("GAME OVER",canvas.width/2,200)
+
+ctx.font='18px "Press Start 2P"'
+ctx.fillText("Score: "+score,canvas.width/2,260)
+
+ctx.fillText("Leaderboard",canvas.width/2,320)
+
+highScores.forEach((s,i)=>{
+
+ctx.fillText(
+(i+1)+". "+s.initials+" "+s.score,
+canvas.width/2,
+360+i*30
+)
+
+})
+
+ctx.fillText("Click to Restart",canvas.width/2,520)
+
+}
+
+// HIGH SCORE
+function checkHighScore(){
+
+if(highScores.length<5 || score>highScores[4].score){
+
+let initials=prompt("New High Score! Enter initials")
+
+highScores.push({initials,score})
+
+highScores.sort((a,b)=>b.score-a.score)
+
+highScores=highScores.slice(0,5)
+
+localStorage.setItem("breakoutScores",JSON.stringify(highScores))
+
+}
+
+}
+
+// RESET
+function resetBall(){
+
+ball.x=canvas.width/2
+ball.y=canvas.height/2
+ball.dx=INITIAL_BALL_SPEED
+ball.dy=-INITIAL_BALL_SPEED
+
+}
+
+// GAME LOOP
+function gameLoop(){
+
+if(!gameStarted){
+drawBackground()
+drawParticles()
+
+ctx.fillStyle="white"
+ctx.font='20px "Press Start 2P"'
+ctx.textAlign="center"
+ctx.fillText("Click to Start",canvas.width/2,canvas.height/2)
+
+requestAnimationFrame(gameLoop)
+return
+}
+
+if(gameOver){
+drawGameOver()
+requestAnimationFrame(gameLoop)
+return
+}
+
+if(paused){
+drawPaused()
+requestAnimationFrame(gameLoop)
+return
+}
+
+drawBackground()
+drawParticles()
+
+paddle.update()
+ball.update()
+
+checkBrickCollision()
+
+updatePowerUps()
+
+paddle.draw()
+ball.draw()
+drawBricks()
+
+drawUI()
+
+requestAnimationFrame(gameLoop)
+
+}
+
+// INPUT
+document.addEventListener("keydown",e=>{
+
+if(e.key==="ArrowRight") paddle.dx=paddle.speed
+if(e.key==="ArrowLeft") paddle.dx=-paddle.speed
+
+if(e.key==="p"||e.key==="P"){
+paused=!paused
+}
+
+})
+
+document.addEventListener("keyup",()=>{
+paddle.dx=0
+})
+
+// START GAME
+canvas.addEventListener("click",()=>{
+
+if(typeof Tone !== "undefined"){
+Tone.start()
+}
+
+startBackgroundMusic()
+
+if(!gameStarted || gameOver){
+
+score=0
+lives=INITIAL_LIVES
+gameOver=false
+
+createBricks()
+
+gameStarted=true
+
+}
+
+})
+
+// START LOOP
+gameLoop()
+
+</script>
+
+</body>
+</html>
